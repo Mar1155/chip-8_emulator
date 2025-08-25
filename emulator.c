@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 /*
 unsigned char V[16] --> 16 * 8-bit registers
     * they are referred as Vx. x --> hex decimal digit (0 --> f)
@@ -23,9 +24,7 @@ char stack[16]; --> 16 * 16-bit fields
 
 char memory[4096] --> 4KB of memory
     * [0x000 --> 0x1ff] reserved to interpreter
-*/
 
-/*
 MEMORY --> [0x000 --> 0x1FF] (256 bytes) (2048 bits) <-- display's pixels state
 Originally chip-8 used a 32x64 pixel monochrome display
 the display state/data is stored in [0x000 to 0x1FF] 32 x 64 bytes
@@ -39,17 +38,19 @@ the display state/data is stored in [0x000 to 0x1FF] 32 x 64 bytes
     this is a memory dump example to represent zero digit as a 8x5 pixel sprite
 */
 struct chip_8 {
-    unsigned char V[16];
-    char I;
-    unsigned char VF;
-    unsigned char delay;
-    unsigned char sound;
-    char PC;
-    char stack[16];
+    uint8_t V[16];
+    uint16_t I;
+    uint8_t delay;
+    uint8_t sound;
+    uint16_t PC;
+    uint16_t stack[16];
     uint8_t SP;
-    char memory[4096];
+    uint8_t memory[4096];
 };
 
+/*
+Read the memory section which contains the display state and draw it in terminal with ANSI codes
+*/
 void draw_display(struct chip_8 *arch) {
     // printf("\033[?25l"); // hide cursor
     fflush(stdout);
@@ -69,6 +70,9 @@ void draw_display(struct chip_8 *arch) {
     fflush(stdout);
 }
 
+/*
+Set the memory section relative to display state to 0x00
+*/
 void clear_display(struct chip_8 *arch) {
     for (int i = 0; i < 256; i++) {
         arch->memory[i] = 0x00; // the first 256 bytes of memory --> display state setted to 0
@@ -80,13 +84,14 @@ void init_arch(struct chip_8 *arch) {
     arch->delay = 0x00;
     arch->sound = 0x00;
     arch->SP = 0;
+    arch->PC = 0x200;
     for (int i = 0; i < 4096; i++) {
         arch->memory[i] = 0x00;
     }
 }
 
 /*
-    read the file and return the file length
+Read the file and return the file length
 */
 int read_program(struct chip_8 *arch, char *program_path) {
     FILE *fileptr;
@@ -97,9 +102,17 @@ int read_program(struct chip_8 *arch, char *program_path) {
     filelen = ftell(fileptr);            // Get the current byte offset in the file
     rewind(fileptr);                     // Jump back to the beginning of the file
 
-    fread(arch->memory[512], 1, filelen, fileptr); // Read in the entire file
+    fread(&arch->memory[512], 1, filelen, fileptr); // Read in the entire file
     fclose(fileptr);
     return filelen;
+}
+
+unsigned short get_PC_inst(struct chip_8 *arch) {
+    // high | low (1 bytes each) of 16 bit instructions
+    uint8_t high = arch->memory[arch->PC];
+    uint8_t low = arch->memory[arch->PC + 1];
+    uint16_t inst = (high << 8) | low;
+    return inst;
 }
 
 int main(int argv, char **args) {
@@ -110,18 +123,39 @@ int main(int argv, char **args) {
     }
 
     struct chip_8 arch;
-    char *program_path = args[1];
-     
-    long filelen = read_program(&arch, program_path);
-
     init_arch(&arch);
 
-    while (1) {
-        char instruction = arch.memory[512 + arch.PC + 1] + arch.memory[512 + arch.PC];
-        printf("%c", instruction);
-        return 0;
+    char *program_path = args[1];
+    long filelen = read_program(&arch, program_path);
 
-        draw_display(&arch);
+    uint16_t inst = get_PC_inst(&arch);
+    printf("%04X", inst);
+
+    int running = 1;
+
+    while (running) {
+        switch (inst & 0xF000) {
+            case 0x0000:
+                switch (inst) {
+                    case 0x00E0:
+                        printf("run 00E0\n");
+                        clear_display(&arch);
+                        break;
+                    case 0x0F02:
+                        printf("run 0F02 ignored\n");
+                        break;
+                    default:
+                        printf("inst %04X not implemented\n", inst);
+                        running = 0;
+                        break;
+                }
+                break;
+
+            // altri casi
+        }
+        // draw_display(&arch);
+        arch.PC += 2;
+        inst = get_PC_inst(&arch);
     }
 
     return 0;
