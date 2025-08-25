@@ -1,0 +1,5 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '/Users/mariobarbieri/Developer/chip8_emulator/main'
+relocations:     []
+...
