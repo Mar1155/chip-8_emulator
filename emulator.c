@@ -45,13 +45,13 @@ struct chip_8 {
     unsigned char delay;
     unsigned char sound;
     char PC;
-    unsigned char SP;
     char stack[16];
+    uint8_t SP;
     char memory[4096];
 };
 
 void draw_display(struct chip_8 *arch) {
-    printf("\033[?25l"); // hide cursor
+    // printf("\033[?25l"); // hide cursor
     fflush(stdout);
     for (int y = 0; y < 32; y++) {     // row
         for (int x = 0; x < 64; x++) { // columns
@@ -65,8 +65,41 @@ void draw_display(struct chip_8 *arch) {
             }
         }
     }
-    printf("\033[?25h"); // show cursor
+    // printf("\033[?25h"); // show cursor
     fflush(stdout);
+}
+
+void clear_display(struct chip_8 *arch) {
+    for (int i = 0; i < 256; i++) {
+        arch->memory[i] = 0x00; // the first 256 bytes of memory --> display state setted to 0
+    }
+}
+
+void init_arch(struct chip_8 *arch) {
+    arch->I = 0x00;
+    arch->delay = 0x00;
+    arch->sound = 0x00;
+    arch->SP = 0;
+    for (int i = 0; i < 4096; i++) {
+        arch->memory[i] = 0x00;
+    }
+}
+
+/*
+    read the file and return the file length
+*/
+int read_program(struct chip_8 *arch, char *program_path) {
+    FILE *fileptr;
+    long filelen;
+
+    fileptr = fopen(program_path, "rb"); // Open the file in binary mode
+    fseek(fileptr, 0, SEEK_END);         // Jump to the end of the file
+    filelen = ftell(fileptr);            // Get the current byte offset in the file
+    rewind(fileptr);                     // Jump back to the beginning of the file
+
+    fread(arch->memory[512], 1, filelen, fileptr); // Read in the entire file
+    fclose(fileptr);
+    return filelen;
 }
 
 int main(int argv, char **args) {
@@ -78,25 +111,16 @@ int main(int argv, char **args) {
 
     struct chip_8 arch;
     char *program_path = args[1];
+     
+    long filelen = read_program(&arch, program_path);
 
-    FILE *fileptr;
-    char *buffer;
-    long filelen;
-
-    fileptr = fopen(program_path, "rb"); // Open the file in binary mode
-    fseek(fileptr, 0, SEEK_END);         // Jump to the end of the file
-    filelen = ftell(fileptr);            // Get the current byte offset in the file
-    rewind(fileptr);                     // Jump back to the beginning of the file
-
-    buffer = (char *)malloc(filelen * sizeof(char)); // Enough memory for the file
-    fread(buffer, 1, filelen, fileptr);              // Read in the entire file
-    fclose(fileptr);                                 // Close the file
-
-    for (int i = 0; i < 256; i++) {
-        arch.memory[i] = 0x00; // the first 256 bytes of memory --> display state setted to 0
-    }
+    init_arch(&arch);
 
     while (1) {
+        char instruction = arch.memory[512 + arch.PC + 1] + arch.memory[512 + arch.PC];
+        printf("%c", instruction);
+        return 0;
+
         draw_display(&arch);
     }
 
