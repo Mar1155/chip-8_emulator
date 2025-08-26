@@ -1,8 +1,10 @@
+#include <curses.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
 /*
 unsigned char V[16] --> 16 * 8-bit registers
     * they are referred as Vx. x --> hex decimal digit (0 --> f)
@@ -49,7 +51,119 @@ struct chip_8 {
     uint16_t stack[16];
     uint8_t SP;
     uint8_t memory[4096];
+    uint8_t key[16];
 };
+
+static int chip8_map_key(int ch); /* prototipo static per evitare implicit non-static */
+static void input_init(void);
+static void input_shutdown(void);
+static void input_poll_all(struct chip_8 *arch, int *quit);
+
+static void draw_display(struct chip_8 *arch);
+static void clear_display(struct chip_8 *arch);
+static void load_fontset(struct chip_8 *arch);
+static void init_arch(struct chip_8 *arch);
+static int read_program(struct chip_8 *arch, char *program_path);
+static unsigned short fetch_instr(struct chip_8 *arch);
+
+typedef struct {
+    int quit;        // flag per uscire
+    int key_pressed; // -1 se nessun tasto, altrimenti codice
+} InputState;
+
+static void input_init() {
+    initscr();            // init ncurses
+    cbreak();             // input per carattere (no line buffering)
+    noecho();             // non fare echo dei tasti
+    keypad(stdscr, TRUE); // abilita tasti speciali (frecce, F-keys)
+    timeout(0);           // getch() non bloccante (0 = polling)
+    // facoltativo: curs_set(0); // nascondi cursore
+}
+
+static void input_shutdown() {
+    // curs_set(1); // ripristina cursore se era nascosto
+    endwin(); // ripristina terminale
+}
+
+void input_poll_all(struct chip_8 *arch, int *quit) {
+    // reset stato tasti
+    memset(arch->key, 0, sizeof(arch->key));
+
+    int ch;
+    while ((ch = getch()) != ERR) {
+        if (ch == 27) { // ESC
+            *quit = 1;
+        } else if (ch == KEY_BACKSPACE) {
+            *quit = 1;
+        }
+        // mapping CHIP‑8
+        int k = chip8_map_key(ch);
+        if (k >= 0) {
+            arch->key[k] = 1;
+        }
+    }
+}
+
+// Mappatura CHIP-8 (16 tasti): layout comune:
+// CHIP-8:  1 2 3 C
+//          4 5 6 D
+//          7 8 9 E
+//          A 0 B F
+// PC:      1 2 3 4
+//          Q W E R
+//          A S D F
+//          Z X C V
+// Restituisce indice 0..15 o -1 se non mappato
+static int chip8_map_key(int ch) {
+    switch (ch) {
+    case '1':
+        return 0x1;
+    case '2':
+        return 0x2;
+    case '3':
+        return 0x3;
+    case '4':
+        return 0xC;
+    case 'q':
+    case 'Q':
+        return 0x4;
+    case 'w':
+    case 'W':
+        return 0x5;
+    case 'e':
+    case 'E':
+        return 0x6;
+    case 'r':
+    case 'R':
+        return 0xD;
+    case 'a':
+    case 'A':
+        return 0x7;
+    case 's':
+    case 'S':
+        return 0x8;
+    case 'd':
+    case 'D':
+        return 0x9;
+    case 'f':
+    case 'F':
+        return 0xE;
+    case 'z':
+    case 'Z':
+        return 0xA;
+    case 'x':
+    case 'X':
+        return 0x0;
+    case 'c':
+    case 'C':
+        return 0xB;
+    case 'v':
+    case 'V':
+        return 0xF;
+    default:
+        return -1;
+    }
+}
 
 uint8_t chip8_fontset[80] = {
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -113,9 +227,10 @@ void init_arch(struct chip_8 *arch) {
     arch->sound = 0;
     arch->SP = 0;
     arch->PC = 0x200;
-    for (int i = 0; i < 4096; i++) {
-        arch->memory[i] = 0x00;
-    }
+    memset(arch->V, 0, sizeof(arch->V));
+    memset(arch->stack, 0, sizeof(arch->stack));
+    memset(arch->memory, 0, sizeof(arch->memory));
+    memset(arch->key, 0, sizeof(arch->key));
     load_fontset(arch);
 }
 
@@ -148,6 +263,8 @@ int main(int argv, char **args) {
         return 1;
     }
 
+    input_init();
+
     struct chip_8 arch;
     init_arch(&arch);
 
@@ -162,7 +279,7 @@ int main(int argv, char **args) {
         arch.PC += 2;
 
         printf("%d:  %04X --> ", n_instr, inst);
-
+        // decode / execute
         if (inst == 0x00E0) {
             clear_display(&arch);
             printf("CLS\n");
@@ -198,8 +315,8 @@ int main(int argv, char **args) {
             }
             printf("SNE V%d, %02X\n", x, kk);
         } else if ((inst & 0xF000) == 0x5000) {
-            uint8_t x = (inst >> 8) & 0xF;  // register index x
-            uint8_t y = (inst >> 12) & 0xF; // register index y
+            uint8_t x = (inst >> 8) & 0xF; // register index x
+            uint8_t y = (inst >> 4) & 0xF; // register index y - FIXED
             if (arch.V[x] == arch.V[y]) {
                 arch.PC += 2;
             }
@@ -215,19 +332,49 @@ int main(int argv, char **args) {
             arch.V[x] += kk;
             printf("ADD V%X, %X\n", x, kk);
         } else if ((inst & 0xF000) == 0x8000) {
-            uint8_t x = (inst >> 8) & 0xF;     // register index x
-            uint8_t y = (inst >> 12) & 0xF;    // register index y
-            uint8_t b = (inst >> 16) & 0xFFFF; // last byte
-            if (b == 0) {
+            uint8_t x = (inst >> 8) & 0xF; // register index x
+            uint8_t y = (inst >> 4) & 0xF; // register index y - FIXED
+            uint8_t n = inst & 0xF;        // last nibble - FIXED
+            if (n == 0) {
                 arch.V[x] = arch.V[y];
-                printf(" LD V%X, V%X\n", x, y);
+                printf("LD V%X, V%X\n", x, y);
+            } else if (n == 1) {
+                arch.V[x] |= arch.V[y];
+                printf("OR V%X, V%X\n", x, y);
+            } else if (n == 2) {
+                arch.V[x] &= arch.V[y];
+                printf("AND V%X, V%X\n", x, y);
+            } else if (n == 3) {
+                arch.V[x] ^= arch.V[y];
+                printf("XOR V%X, V%X\n", x, y);
+            } else if (n == 4) {
+                uint16_t sum = arch.V[x] + arch.V[y];
+                arch.VF = (sum > 255) ? 1 : 0;
+                arch.V[x] = sum & 0xFF;
+                printf("ADD V%X, V%X\n", x, y);
+            } else if (n == 5) {
+                arch.VF = (arch.V[x] > arch.V[y]) ? 1 : 0;
+                arch.V[x] -= arch.V[y];
+                printf("SUB V%X, V%X\n", x, y);
+            } else if (n == 6) {
+                arch.VF = arch.V[x] & 1;
+                arch.V[x] >>= 1;
+                printf("SHR V%X\n", x);
+            } else if (n == 7) {
+                arch.VF = (arch.V[y] > arch.V[x]) ? 1 : 0;
+                arch.V[x] = arch.V[y] - arch.V[x];
+                printf("SUBN V%X, V%X\n", x, y);
+            } else if (n == 0xE) {
+                arch.VF = (arch.V[x] & 0x80) ? 1 : 0;
+                arch.V[x] <<= 1;
+                printf("SHL V%X\n", x);
             } else {
-                printf("%04X Not implemented", inst);
+                printf("8%X%X%X Not implemented\n", x, y, n);
                 return 1;
             }
         } else if ((inst & 0xF000) == 0x9000) {
-            uint8_t x = (inst >> 8) & 0xF;  // register index x
-            uint8_t y = (inst >> 12) & 0xF; // register index y
+            uint8_t x = (inst >> 8) & 0xF; // register index x
+            uint8_t y = (inst >> 4) & 0xF; // register index y - FIXED
             if (arch.V[x] != arch.V[y]) {
                 arch.PC += 2;
             }
@@ -236,6 +383,10 @@ int main(int argv, char **args) {
             uint16_t nnn = inst & 0xFFF;
             arch.I = nnn;
             printf("LD I, %04X\n", nnn);
+        } else if ((inst & 0xF000) == 0xB000) {
+            uint16_t nnn = inst & 0xFFF;
+            arch.PC = nnn + arch.V[0];
+            printf("JP V0, %04X\n", nnn);
         } else if ((inst & 0xF000) == 0xD000) {
             uint8_t x = (inst >> 8) & 0xF;
             uint8_t y = (inst >> 4) & 0xF;
@@ -263,12 +414,30 @@ int main(int argv, char **args) {
             }
             printf("DRW V%X, V%X, %X\n", x, y, n);
         } else if ((inst & 0xF000) == 0xE000) {
-            printf("E000 mask\n");
+            uint8_t x = (inst >> 8) & 0xF;
+            uint8_t kk = inst & 0xFF;
+
+            if (kk == 0x9E) {
+                uint8_t key_id = arch.V[x] & 0xF;
+                if (arch.key[key_id] != 0) {
+                    arch.PC += 2;
+                }
+                printf("SKP V%X (key %X)\n", x, key_id);
+            } else if (kk == 0xA1) {
+                uint8_t key_id = arch.V[x] & 0xF;
+                if (arch.key[key_id] == 0) {
+                    arch.PC += 2;
+                }
+                printf("SKNP V%X (key %X)\n", x, key_id);
+            } else {
+                printf("E%02X Not implemented\n", kk);
+                return 1;
+            }
         } else if ((inst & 0xF000) == 0xF000) {
             uint8_t x = (inst >> 8) & 0xF; // register index
             uint8_t kk = inst & 0xFF;
             if (kk == 0x65) {
-                for (int i = 0; i < x; i++) {
+                for (int i = 0; i <= x; i++) {
                     arch.V[i] = arch.memory[arch.I + i];
                 }
                 printf("LD V%d, [I]\n", x);
@@ -281,8 +450,8 @@ int main(int argv, char **args) {
                 uint8_t x = (inst >> 8) & 0xF;
                 uint16_t n = arch.V[x];
                 uint8_t h = (int)n / 100;
-                uint8_t t = ((int)n / 10) - h;
-                uint8_t u = n - (h + t);
+                uint8_t t = ((int)n / 10) % 10;
+                uint8_t u = n % 10;
                 arch.memory[arch.I] = h;
                 arch.memory[arch.I + 1] = t;
                 arch.memory[arch.I + 2] = u;
@@ -299,6 +468,41 @@ int main(int argv, char **args) {
                 uint8_t x = (inst >> 8) & 0xF;
                 arch.V[x] = arch.delay;
                 printf("LD V%X, DT\n", x);
+            } else if (kk == 0x18) {
+                uint8_t x = (inst >> 8) & 0xF;
+                arch.sound = arch.V[x];
+                printf("LD ST, V%X\n", x);
+            } else if (kk == 0x29) {
+                // FX29 - Set I = location of sprite for digit VX
+                uint8_t x = (inst >> 8) & 0xF;
+                arch.I = arch.V[x] * 5; // ogni carattere font è 5 bytes
+                printf("LD F, V%X\n", x);
+            } else if (kk == 0x0A) {
+                // FX0A - Wait for key press, store in VX
+                uint8_t x = (inst >> 8) & 0xF;
+                int key_pressed = -1;
+
+                // Cerca se qualche tasto è premuto
+                for (int i = 0; i < 16; i++) {
+                    if (arch.key[i]) {
+                        key_pressed = i;
+                        break;
+                    }
+                }
+
+                if (key_pressed >= 0) {
+                    arch.V[x] = key_pressed;
+                    printf("LD V%X, K (got key %X)\n", x, key_pressed);
+                } else {
+                    // Nessun tasto premuto, ripeti questa istruzione
+                    arch.PC -= 2;
+                    printf("LD V%X, K (waiting...)\n", x);
+                }
+            } else if (kk == 0x9E) {
+                uint8_t x = (inst >> 8) & 0xF;
+                if (arch.key[arch.V[x]] != 0) {
+                    arch.PC += 2;
+                }
             }
             // not implemented branch
             else {
@@ -315,14 +519,23 @@ int main(int argv, char **args) {
 
         draw_display(&arch);
 
-        if (arch.delay > 0) {
+        int quit = 0;
+        input_poll_all(&arch, &quit);
+        if (quit)
+            running = 0;
+
+        // timers
+        if (arch.delay > 0)
             arch.delay--;
+        if (arch.sound > 0) {
+            arch.sound--;
+            printf("\a");
         }
 
-        n_instr++;
-        struct timespec ts = {.tv_sec = 0, .tv_nsec = 16666666}; // 60 fps
+        struct timespec ts = {.tv_sec = 0, .tv_nsec = 16666666};
         nanosleep(&ts, NULL);
     }
 
+    input_shutdown();
     return 0;
 }
