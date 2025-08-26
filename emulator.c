@@ -167,7 +167,8 @@ int main(int argv, char **args) {
             clear_display(&arch);
             printf("CLS\n");
         } else if (inst == 0x00EE) {
-           arch.PC = arch.stack[--arch.SP];
+            arch.PC = arch.stack[--arch.SP];
+            printf("RET\n");
         } else if ((inst & 0xF000) == 0x0000) { // ignored by modern interpreters
             // uint16_t nnn = (inst >> 4) & 0xFFF;
             // arch.PC = nnn;
@@ -181,7 +182,28 @@ int main(int argv, char **args) {
             arch.stack[arch.SP] = arch.PC;
             arch.SP++;
             arch.PC = nnn;
-            printf("CALL %03X", nnn);
+            printf("CALL %03X\n", nnn);
+        } else if ((inst & 0xF000) == 0x3000) {
+            uint8_t x = (inst >> 8) & 0xF; // register index
+            uint8_t kk = inst & 0xFF;      // 8 bit lowest bits of the instruction
+            if (arch.V[x] == kk) {
+                arch.PC += 2;
+            }
+            printf("SE V%X, V%X\n", x, kk);
+        } else if ((inst & 0xF000) == 0x4000) {
+            uint8_t x = (inst >> 8) & 0xF; // register index
+            uint8_t kk = inst & 0xFF;      // 8 bit lowest bits of the instruction
+            if (arch.V[x] != kk) {
+                arch.PC += 2;
+            }
+            printf("SNE V%d, %02X\n", x, kk);
+        } else if ((inst & 0xF000) == 0x5000) {
+            uint8_t x = (inst >> 8) & 0xF;  // register index x
+            uint8_t y = (inst >> 12) & 0xF; // register index y
+            if (arch.V[x] == arch.V[y]) {
+                arch.PC += 2;
+            }
+            printf("SE V%X, V%X\n", x, y);
         } else if ((inst & 0xF000) == 0x6000) {
             uint8_t x = (inst >> 8) & 0xF; // register index
             uint8_t kk = inst & 0xFF;      // 8 bit lowest bits of the instruction
@@ -191,7 +213,25 @@ int main(int argv, char **args) {
             uint8_t x = (inst >> 8) & 0xF; // register index
             uint8_t kk = inst & 0xFF;
             arch.V[x] += kk;
-            printf("ADD V%X, %X", x, kk);
+            printf("ADD V%X, %X\n", x, kk);
+        } else if ((inst & 0xF000) == 0x8000) {
+            uint8_t x = (inst >> 8) & 0xF;     // register index x
+            uint8_t y = (inst >> 12) & 0xF;    // register index y
+            uint8_t b = (inst >> 16) & 0xFFFF; // last byte
+            if (b == 0) {
+                arch.V[x] = arch.V[y];
+                printf(" LD V%X, V%X\n", x, y);
+            } else {
+                printf("%04X Not implemented", inst);
+                return 1;
+            }
+        } else if ((inst & 0xF000) == 0x9000) {
+            uint8_t x = (inst >> 8) & 0xF;  // register index x
+            uint8_t y = (inst >> 12) & 0xF; // register index y
+            if (arch.V[x] != arch.V[y]) {
+                arch.PC += 2;
+            }
+            printf("SNE V%X, V%X\n", x, y);
         } else if ((inst & 0xF000) == 0xA000) {
             uint16_t nnn = inst & 0xFFF;
             arch.I = nnn;
@@ -221,9 +261,50 @@ int main(int argv, char **args) {
                     }
                 }
             }
-            printf("\n");
+            printf("DRW V%X, V%X, %X\n", x, y, n);
         } else if ((inst & 0xF000) == 0xE000) {
             printf("E000 mask\n");
+        } else if ((inst & 0xF000) == 0xF000) {
+            uint8_t x = (inst >> 8) & 0xF; // register index
+            uint8_t kk = inst & 0xFF;
+            if (kk == 0x65) {
+                for (int i = 0; i < x; i++) {
+                    arch.V[i] = arch.memory[arch.I + i];
+                }
+                printf("LD V%d, [I]\n", x);
+            } else if (kk == 0x55) {
+                for (int i = 0; i < x; i++) {
+                    arch.memory[arch.I + i] = arch.V[i];
+                }
+                printf("LD [I], V%d\n", x);
+            } else if (kk == 0x33) {
+                uint8_t x = (inst >> 8) & 0xF;
+                uint16_t n = arch.V[x];
+                uint8_t h = (int)n / 100;
+                uint8_t t = ((int)n / 10) - h;
+                uint8_t u = n - (h + t);
+                arch.memory[arch.I] = h;
+                arch.memory[arch.I + 1] = t;
+                arch.memory[arch.I + 2] = u;
+                printf("LD B, V%X\n", x);
+            } else if (kk == 0x1E) {
+                uint8_t x = (inst >> 8) & 0xF;
+                arch.I += arch.V[x];
+                printf("ADD, I, V%X\n", x);
+            } else if (kk == 0x15) {
+                uint8_t x = (inst >> 8) & 0xF;
+                arch.delay = arch.V[x];
+                printf("LD DT, V%X\n", x);
+            } else if (kk == 0x07) {
+                uint8_t x = (inst >> 8) & 0xF;
+                arch.V[x] = arch.delay;
+                printf("LD V%X, DT\n", x);
+            }
+            // not implemented branch
+            else {
+                printf("%04X Not implemented", inst);
+                return 1;
+            }
         }
         // not implemented branch
         else {
@@ -232,7 +313,12 @@ int main(int argv, char **args) {
         }
         fflush(stdout);
 
-        // draw_display(&arch)
+        draw_display(&arch);
+
+        if (arch.delay > 0) {
+            arch.delay--;
+        }
+
         n_instr++;
         struct timespec ts = {.tv_sec = 0, .tv_nsec = 16666666}; // 60 fps
         nanosleep(&ts, NULL);
