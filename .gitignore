@@ -2,3 +2,5 @@ chip8-test-suite/*
 .vscode/*
 a.out
 emulator
+.DS_Store
+emulator.dSYM/*
