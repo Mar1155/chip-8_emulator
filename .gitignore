@@ -1,3 +1,4 @@
 chip8-test-suite/*
 .vscode/*
 a.out
+emulator
